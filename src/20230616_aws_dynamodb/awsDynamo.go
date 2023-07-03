@@ -11,34 +11,37 @@ import (
 	"os"
 )
 
+// dynamodbav tag
+// dynamodbattribute로 marshal, unmarshal 할땐 dynamodav tag만 처리함
 type TestTable struct {
 	Id           string     `json:"id"`
 	Name         string     `json:"name"`
-	SubItemList  []SubItem  `json:"sub_item_list"`
-	InfoItemList []InfoItem `json:"info_item_list"`
+	SubItemList  []SubItem  `json:"sub_item_list,omitempty"`
+	InfoItemList []InfoItem `json:"info_item_list,omitempty"`
 }
 
 type SubItem struct {
-	SubId    string `json:"sub_id"`
-	Nickname string `json:"nickname"`
-	value    string `json:"value"`
+	SubId    string `json:"sub_id,omitempty"`
+	Nickname string `json:"nickname,omitempty"`
+	value    string `json:"value,omitempty"`
+	Size     int    `json:"size,omitempty"`
 }
 
 type InfoItem struct {
-	Location string `json:"location"`
-	Value    string `json:"value"`
+	Location string `json:"location,omitempty"`
+	Value    string `json:"value,omitempty"`
 }
 
 var sampleData = `
 {
-  "id": "jiemu",
-  "name": "jiemu",
+  "id": "temp2",
+  "name": "temp2",
   "sub_item_list": [
     {
-      "value": "test"
+      "sub_id": "test version 2"
     },
 	{
-      "sub_id": "food"
+      "size": 64
     }
   ]
 }
