@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -49,5 +50,29 @@ func main() {
 
 	fmt.Println("2023년 6월 1일:", firstDay.Format(layout))
 	fmt.Println("2023년 6월 마지막 날:", lastDay.Format(layout))
+
+	var now = time.Now()
+	var curHour = now.Hour()
+	var weekday = now.Weekday()
+	var curDay = now.Day()
+
+	var regdate = strings.ReplaceAll(now.String()[0:10], "-", "")
+
+	fmt.Println("now : ", now)
+	fmt.Println("curHour : ", curHour)
+	fmt.Println("weekday : ", weekday)
+	fmt.Println("curDay : ", curDay)
+	fmt.Println("regdate : ", regdate)
+
+	dateString := "202301"
+	layoutTemp := "20060102"
+
+	parsedTime, err := time.Parse(layoutTemp, dateString)
+	if err != nil {
+		fmt.Println("날짜 파싱 오류:", err)
+		fmt.Println("파싱된 시간:", parsedTime)
+	} else {
+		fmt.Println("파싱된 시간:", parsedTime)
+	}
 
 }
