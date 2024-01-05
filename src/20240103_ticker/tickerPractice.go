@@ -8,12 +8,18 @@ import (
 func main() {
 	fmt.Println("BatchService Start ====")
 
-	// 코드 기동시간 기준으로 다음 시간 01분부터 배치가 작동하도록 수정
+	// 현재 시간
 	now := time.Now()
-	nextRun := time.Date(now.Year(), now.Month(), now.Day(), now.Hour()+1, 1, 0, 0, now.Location())
-	durationUntilNextRun := nextRun.Sub(now)
+	nextRun := now.Add(time.Hour).Truncate(30 * time.Minute)
 
+	// 다음 시간까지 대기
+	durationUntilNextRun := nextRun.Sub(now)
+	fmt.Printf("다음 실행 시간까지 대기 중 (%s 후에 실행됩니다)...\n", durationUntilNextRun)
 	time.Sleep(durationUntilNextRun)
+
+	// 최초 실행 : 이후 ticker로 주기적인 실행
+	fmt.Println("process 가동")
+	fmt.Printf("now time : %v\n", time.Now())
 
 	ticker := time.NewTicker(1 * time.Hour)
 	tickerQuitCh := make(chan bool)
@@ -30,7 +36,7 @@ func main() {
 				// process
 				fmt.Println("process 가동")
 				fmt.Printf("now time : %v\n", time.Now())
-			// 무한루프를 위한 추가 조건
+
 			case <-tickerQuitCh:
 				ticker.Stop()
 				return
