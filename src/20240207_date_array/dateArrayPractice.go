@@ -5,20 +5,25 @@ import (
 	"time"
 )
 
+type dateRange struct {
+	startDate string
+	endDate   string
+}
+
 func main() {
-	startDate := "2024020100"
-	endDate := "2024020523"
-	selectType := "time"
+	startDate := "202311"
+	endDate := "202401"
+	selectType := "month"
 
 	result := createDateFields(startDate, endDate, selectType)
 
 	for k, v := range result {
-		fmt.Printf("item[%v] : %v\n", k, v)
+		fmt.Printf("item[%v] : %+v\n", k, v)
 	}
 }
 
-func createDateFields(startDate, endDate, selectType string) []string {
-	result := make([]string, 0)
+func createDateFields(startDate, endDate, selectType string) []dateRange {
+	result := make([]dateRange, 0)
 
 	var layout string
 	if selectType == "date" {
@@ -41,21 +46,29 @@ func createDateFields(startDate, endDate, selectType string) []string {
 		return nil
 	}
 
-	if selectType == "date" {
-		for current := start; !current.After(end); current = current.AddDate(0, 0, 1) {
-			currentDate := current.Format(layout)
-			result = append(result, currentDate)
+	// 시작과 끝 년도 계산
+	startYear := start.Year()
+	endYear := end.Year()
+
+	for year := startYear; year <= endYear; year++ {
+		yearStart := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+		yearEnd := time.Date(year+1, 1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Second)
+
+		// 범위의 끝이 원래의 끝 날짜를 넘어가면 수정
+		if yearEnd.After(end) {
+			yearEnd = end
 		}
-	} else if selectType == "time" {
-		for current := start; !current.After(end); current = current.Add(60 * time.Minute) {
-			currentDate := current.Format(layout)
-			result = append(result, currentDate)
+
+		// 첫 해는 시작 월부터, 이후 해들은 1월 1일부터 시작
+		if year == startYear {
+			yearStart = start
 		}
-	} else if selectType == "month" {
-		for current := start; !current.After(end); current = current.AddDate(0, 1, 0) {
-			currentDate := current.Format(layout)
-			result = append(result, currentDate)
+
+		d := dateRange{
+			startDate: yearStart.Format(layout),
+			endDate:   yearEnd.Format(layout),
 		}
+		result = append(result, d)
 	}
 
 	return result
