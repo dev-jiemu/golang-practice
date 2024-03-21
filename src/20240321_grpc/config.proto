@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+option go_package = "sample/config";
+
+package config;
+
+// 설정 조회 서비스
+service ConfigStore {
+  rpc Get (ConfigRequest) returns (ConfigResponse);
+}
+
+// 요청
+message ConfigRequest {
+  string profile = 1;
+}
+
+// 응답
+message ConfigResponse {
+  string json_config = 1;
+}

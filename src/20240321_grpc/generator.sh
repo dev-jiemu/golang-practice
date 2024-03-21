@@ -1,0 +1,1 @@
+protoc -I . config.proto --go_out=.
