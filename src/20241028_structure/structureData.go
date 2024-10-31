@@ -15,11 +15,23 @@ func structureData(data []map[string]string) []Item {
 	result := make([]Item, 0, len(data))
 	stack := make([]*[]Item, 1, len(data))
 	stack[0] = &result
-	prevDepth := 0
+	prevDepth := 1
+	validSequences := make(map[string]bool)
+
+	// 유효 sequence 기록
+	for _, item := range data {
+		sequence := item["sequence"]
+		validSequences[sequence] = true
+	}
 
 	for _, item := range data {
 		sequence := item["sequence"]
 		depth := len(sequence) / 2
+
+		parentSequence := sequence[:len(sequence)-2]
+		if depth > 1 && !validSequences[parentSequence] {
+			continue
+		}
 
 		for depth < prevDepth {
 			stack = stack[:len(stack)-1]
@@ -57,13 +69,14 @@ func main() {
 		{"sequence": "0101"},
 		{"sequence": "010101"},
 		{"sequence": "010102"},
-		{"sequence": "0102"},
-		{"sequence": "010201"},
-		{"sequence": "010202"},
+
+		{"sequence": "010201"}, // 안나와야하는 데이터 1
+		{"sequence": "010202"}, // 안나와야하는 데이터 2
+
 		{"sequence": "02"},
 		{"sequence": "0201"},
-		{"sequence": "0202"},
-		{"sequence": "020201"},
+
+		{"sequence": "020201"}, // 안나와야하는 데이터 3
 	}
 
 	structuredData := structureData(data)
