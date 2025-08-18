@@ -111,8 +111,8 @@ func transcribeAudio(config *Config, filePath string) {
 
 	// 다른 필드들 추가
 	writer.WriteField("model", "whisper-1") // 시간 문제때문에 이거로 해야함
-	writer.WriteField("response_format", "verbose_json")
-	writer.WriteField("timestamp_granularities[]", "word")
+	writer.WriteField("response_format", "srt")
+	// writer.WriteField("timestamp_granularities[]", "word")
 
 	err = writer.Close()
 	if err != nil {
@@ -143,13 +143,32 @@ func transcribeAudio(config *Config, filePath string) {
 		fmt.Printf("API 오류 (상태코드: %d): %s\n", resp.StatusCode, string(responseBody))
 	}
 
-	var whisperResponse WhisperResponse
-	err = json.Unmarshal(responseBody, &whisperResponse)
-	if err != nil {
-		fmt.Printf("JSON 파싱 실패: %v\n", err)
-	}
+	//var whisperResponse WhisperResponse
+	//err = json.Unmarshal(responseBody, &whisperResponse)
+	//if err != nil {
+	//	fmt.Printf("JSON 파싱 실패: %v\n", err)
+	//}
+	//
+	//fmt.Printf("result : [%+v]\n", whisperResponse)
+	//
+	//jsonData, err := json.MarshalIndent(whisperResponse, "", "  ")
+	//if err != nil {
+	//	fmt.Printf("JSON 마샬링 실패: %v\n", err)
+	//	return
+	//}
+	//
+	//filename := "whisper_output.json"
+	//err = os.WriteFile(filename, jsonData, 0644)
+	//if err != nil {
+	//	fmt.Printf("파일 저장 실패: %v\n", err)
+	//	return
+	//}
 
-	fmt.Printf("result : [%+v]\n", whisperResponse)
+	// JSON으로 받았다면
+	//saveWhisperOutput(responseBody, "json")
+
+	// SRT로 받았다면
+	saveWhisperOutput(responseBody, "srt")
 }
 
 func extractAudioToMP3(videoPath string) (string, error) {
@@ -224,6 +243,46 @@ func extractAudioToMP3(videoPath string) (string, error) {
 	fmt.Printf("추출된 오디오 파일 크기: %.2f MB\n", fileSizeMB)
 
 	return audioPath, nil
+}
+
+func saveWhisperOutput(responseBody []byte, responseFormat string) {
+	if responseFormat == "json" || responseFormat == "verbose_json" {
+		// ✅ JSON 파싱
+		var whisperResponse WhisperResponse
+		err := json.Unmarshal(responseBody, &whisperResponse)
+		if err != nil {
+			fmt.Printf("JSON 파싱 실패: %v\n", err)
+			return
+		}
+
+		// pretty JSON으로 저장
+		jsonData, err := json.MarshalIndent(whisperResponse, "", "  ")
+		if err != nil {
+			fmt.Printf("JSON 마샬링 실패: %v\n", err)
+			return
+		}
+
+		err = os.WriteFile("whisper_output.json", jsonData, 0644)
+		if err != nil {
+			fmt.Printf("JSON 파일 저장 실패: %v\n", err)
+			return
+		}
+		fmt.Println("✅ JSON 결과를 whisper_output.json 으로 저장 완료")
+
+	} else {
+		// ✅ JSON이 아닌 경우 (srt, vtt, text 등)
+		ext := "." + responseFormat
+		if responseFormat == "text" {
+			ext = ".txt"
+		}
+
+		err := os.WriteFile("whisper_output"+ext, responseBody, 0644)
+		if err != nil {
+			fmt.Printf("파일 저장 실패: %v\n", err)
+			return
+		}
+		fmt.Printf("✅ %s 결과를 whisper_output%s 으로 저장 완료\n", responseFormat, ext)
+	}
 }
 
 func main() {
