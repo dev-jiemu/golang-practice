@@ -1,6 +1,8 @@
 module example
 
-go 1.19
+go 1.21.4
+
+toolchain go1.24.5
 
 require (
 	github.com/labstack/echo/v4 v4.9.0
@@ -23,8 +25,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.33.1
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.20.0
 	github.com/aws/aws-sdk-go-v2/service/efs v1.21.6
+	github.com/go-audio/audio v1.0.0
+	github.com/go-audio/wav v1.1.0
 	github.com/go-sql-driver/mysql v1.6.0
+	github.com/streadway/amqp v1.1.0
+	github.com/streamer45/silero-vad-go v0.2.1
 	github.com/xuri/excelize/v2 v2.6.1
+	github.com/yalue/onnxruntime_go v1.21.0
 )
 
 require (
@@ -40,14 +47,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.14.12 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.19.2 // indirect
 	github.com/aws/smithy-go v1.20.1 // indirect
+	github.com/go-audio/riff v1.0.0 // indirect
 	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
-	github.com/rabbitmq/amqp091-go v1.10.0 // indirect
 	github.com/richardlehane/mscfb v1.0.4 // indirect
 	github.com/richardlehane/msoleps v1.0.3 // indirect
-	github.com/streadway/amqp v1.1.0 // indirect
 	github.com/xuri/efp v0.0.0-20220603152613-6918739fd470 // indirect
 	github.com/xuri/nfp v0.0.0-20220409054826-5e722a1d9e22 // indirect
 	golang.org/x/time v0.0.0-20201208040808-7e3f01d25324 // indirect
