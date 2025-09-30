@@ -28,10 +28,10 @@ require (
 	github.com/go-audio/audio v1.0.0
 	github.com/go-audio/wav v1.1.0
 	github.com/go-sql-driver/mysql v1.6.0
+	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/streadway/amqp v1.1.0
 	github.com/streamer45/silero-vad-go v0.2.1
 	github.com/xuri/excelize/v2 v2.6.1
-	github.com/yalue/onnxruntime_go v1.21.0
 )
 
 require (
