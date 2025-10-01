@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -18,12 +19,14 @@ import (
 // Ref. https://github.com/rabbitmq/amqp091-go/blob/main/reconnect_test.go
 
 type RabbitMqConsumer struct {
-	baseCtx    context.Context
-	amqpURL    string
-	queueName  string
-	prefetch   int
-	jobTimeout time.Duration
-	done       chan struct{}
+	baseCtx      context.Context
+	amqpURL      string
+	queueName    string
+	prefetch     int
+	jobTimeout   time.Duration
+	done         chan struct{}
+	ProcessFunc  func(ctx context.Context, message amqp.Delivery) error // 테스트용
+	ProcessCount atomic.Int32
 }
 
 func NewRabbitMqConsumer(ctx context.Context, url, queueName string, prefetch int, jobTimeout time.Duration) *RabbitMqConsumer {
@@ -255,14 +258,17 @@ func (v *RabbitMqConsumer) handleMessage(message amqp.Delivery, mqLog *slog.Logg
 
 // processBusinessLogic: 실제 비즈니스 로직 처리
 func (v *RabbitMqConsumer) processBusinessLogic(ctx context.Context, message amqp.Delivery) error {
-	// TODO: 실제 비즈니스 로직 구현
-	// 20분까지 걸릴 수 있는 긴 작업
+	// ProcessFunc이 주입되었으면 그걸 사용 (테스트용)
+	if v.ProcessFunc != nil {
+		v.ProcessCount.Add(1)
+		return v.ProcessFunc(ctx, message)
+	}
 
+	// 기존 로직 (프로덕션용)
 	select {
 	case <-ctx.Done():
 		return fmt.Errorf("processing timeout or context cancelled")
 	case <-time.After(time.Second * 2):
-		// 실제 작업 시뮬레이션
 		slog.Info("Business logic completed", "body", string(message.Body))
 		return nil
 	}

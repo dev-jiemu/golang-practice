@@ -31,6 +31,7 @@ require (
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/streadway/amqp v1.1.0
 	github.com/streamer45/silero-vad-go v0.2.1
+	github.com/stretchr/testify v1.8.4
 	github.com/xuri/excelize/v2 v2.6.1
 )
 
@@ -47,14 +48,17 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.14.12 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.19.2 // indirect
 	github.com/aws/smithy-go v1.20.1 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-audio/riff v1.0.0 // indirect
 	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/richardlehane/mscfb v1.0.4 // indirect
 	github.com/richardlehane/msoleps v1.0.3 // indirect
 	github.com/xuri/efp v0.0.0-20220603152613-6918739fd470 // indirect
 	github.com/xuri/nfp v0.0.0-20220409054826-5e722a1d9e22 // indirect
 	golang.org/x/time v0.0.0-20201208040808-7e3f01d25324 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
