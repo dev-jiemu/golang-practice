@@ -58,6 +58,21 @@ func convertWhisperResponse(response WhisperResponse, filterSpeech []speech.Segm
 			continue
 		}
 
+		// NoSpeechProb 기반 환청 필터링 (0.6 이상이면 음성이 없을 확률이 높음)
+		if seg.NoSpeechProb > 0.6 {
+			fmt.Printf("환청 제거 (NoSpeechProb=%.2f): %.2fs-%.2fs \"%s\"\n",
+				seg.NoSpeechProb, seg.Start, seg.End, strings.TrimSpace(seg.Text))
+			continue
+		}
+
+		// 너무 짧은 구간 제거 (0.3초 미만)
+		duration := seg.End - seg.Start
+		if duration < 0.3 {
+			fmt.Printf("너무 짧은 구간 제거 (%.2fs): \"%s\"\n",
+				duration, strings.TrimSpace(seg.Text))
+			continue
+		}
+
 		// subtitle object create
 		subtitle := SubtitleSegment{
 			Idx:                     seg.ID,
@@ -116,7 +131,8 @@ func convertWhisperResponse(response WhisperResponse, filterSpeech []speech.Segm
 	}
 
 	if len(filterSpeech) == 0 {
-		return convertedSegments
+		// 반복 텍스트 제거 (연속된 같은 문장)
+		return removeDuplicateTexts(convertedSegments)
 	}
 
 	/**
@@ -140,7 +156,7 @@ func convertWhisperResponse(response WhisperResponse, filterSpeech []speech.Segm
 		}
 	}
 
-	return validSegments
+	return removeDuplicateTexts(validSegments)
 }
 
 // convertSegmentToSrtFormat : segments data SRT 포맷으로 변경
@@ -279,4 +295,30 @@ func sortSpeechSegments(segments []speech.Segment) {
 	sort.Slice(segments, func(i, j int) bool {
 		return segments[i].SpeechStartAt < segments[j].SpeechStartAt
 	})
+}
+
+// removeDuplicateTexts : 연속된 같은 텍스트 제거
+func removeDuplicateTexts(segments []SubtitleSegment) []SubtitleSegment {
+	if len(segments) == 0 {
+		return segments
+	}
+
+	filtered := make([]SubtitleSegment, 0, len(segments))
+	filtered = append(filtered, segments[0])
+
+	for i := 1; i < len(segments); i++ {
+		current := normalizeWhitespace(segments[i].Sentence)
+		previous := normalizeWhitespace(filtered[len(filtered)-1].Sentence)
+
+		// 연속된 같은 텍스트는 건너뜀
+		if current == previous {
+			fmt.Printf("반복 텍스트 제거: %.2fs-%.2fs \"%s\"\n",
+				segments[i].StartTime, segments[i].EndTime, current)
+			continue
+		}
+
+		filtered = append(filtered, segments[i])
+	}
+
+	return filtered
 }

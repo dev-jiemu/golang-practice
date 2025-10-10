@@ -91,7 +91,7 @@ func VadFilter(wavAudioPath string) ([]speech.Segment, string, error) {
 	fmt.Printf("탐지된 음성 구간: %d개\n", len(segments))
 
 	// 후처리: 가까운 구간 병합
-	const maxGapSeconds = 0.5 // 0.5초 이내 간격이면 병합
+	const maxGapSeconds = 2.0 // 0.5 → 2.0초 이내 간격이면 병합
 
 	mergedSegments := []speech.Segment{}
 	if len(segments) > 0 {
@@ -128,7 +128,7 @@ func VadFilter(wavAudioPath string) ([]speech.Segment, string, error) {
 			processedAudio[i] = 0.0
 		}
 	} else {
-		// 음성 구간 외의 모든 곳을 무음 처리
+		// 음성 구간 외의 긴 무음만 처리 (짧은 무음은 원본 유지)
 		speechRegions := make([]bool, len(pcmBuf.Data))
 
 		// 음성 구간을 마킹
@@ -164,12 +164,41 @@ func VadFilter(wavAudioPath string) ([]speech.Segment, string, error) {
 			fmt.Printf("음성 구간 %d: %.2fs ~ %.2fs (%.2fs)\n", i+1, segment.SpeechStartAt, segment.SpeechEndAt, duration)
 		}
 
-		// 음성이 아닌 구간을 무음 처리
+		// 긴 무음 구간만 제거 (1초 이상)
+		const longSilenceThreshold = 1.0 // 1초
 		silencedSamples := 0
-		for i := range processedAudio {
+
+		// 연속된 무음 구간 찾기
+		inSilence := false
+		silenceStart := 0
+
+		for i := 0; i < len(processedAudio); i++ {
 			if !speechRegions[i] {
-				processedAudio[i] = 0.0 // 무음 처리
-				silencedSamples++
+				// 무음 구간 시작
+				if !inSilence {
+					inSilence = true
+					silenceStart = i
+				}
+
+				// 마지막 샘플이거나 다음이 음성이면 무음 구간 종료
+				if i == len(processedAudio)-1 || speechRegions[i+1] {
+					silenceLength := float64(i-silenceStart+1) / float64(sampleRate)
+
+					// 긴 무음만 0으로 처리
+					if silenceLength >= longSilenceThreshold {
+						for j := silenceStart; j <= i; j++ {
+							processedAudio[j] = 0.0
+							silencedSamples++
+						}
+						fmt.Printf("🔇 긴 무음 제거: %.2fs ~ %.2fs (%.2fs)\n",
+							float64(silenceStart)/float64(sampleRate),
+							float64(i)/float64(sampleRate),
+							silenceLength)
+					}
+					// 짧은 무음은 원본 유지 (아무것도 안 함)
+
+					inSilence = false
+				}
 			}
 		}
 
@@ -180,7 +209,8 @@ func VadFilter(wavAudioPath string) ([]speech.Segment, string, error) {
 		fmt.Printf("\n📊 처리 결과:\n")
 		fmt.Printf("전체 길이: %.2f초 (유지됨)\n", originalDuration)
 		fmt.Printf("음성 구간: %.2f초 (%.1f%%)\n", speechDuration, speechDuration/originalDuration*100)
-		fmt.Printf("무음 처리: %.2f초 (%.1f%%)\n", silencedDuration, silencedDuration/originalDuration*100)
+		fmt.Printf("긴 무음 제거: %.2f초 (%.1f%%)\n", silencedDuration, silencedDuration/originalDuration*100)
+		fmt.Printf("짧은 무음 유지: %.2f초\n", originalDuration-speechDuration-silencedDuration)
 	}
 
 	// 출력 파일 경로 생성
@@ -227,7 +257,7 @@ func VadFilter(wavAudioPath string) ([]speech.Segment, string, error) {
 
 	fmt.Printf("\n✅ 처리 완료!\n")
 	fmt.Printf("출력 파일: %s\n", outputFile)
-	fmt.Printf("📝 음성이 아닌 구간은 무음 처리되었습니다 (전체 길이 유지)\n")
+	fmt.Printf("📝 1초 이상 긴 무음만 제거, 짧은 무음은 원본 유지 (타임스탬프 보존)\n")
 
 	return segments, outputFile, nil
 }
