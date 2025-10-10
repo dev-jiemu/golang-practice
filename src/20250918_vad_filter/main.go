@@ -1,13 +1,6 @@
 package main
 
 /*
-#cgo CFLAGS: -I/usr/local/onnxruntime-osx-arm64-1.18.1/include
-#cgo LDFLAGS: -L/usr/local/onnxruntime-osx-arm64-1.18.1/lib -lonnxruntime -Wl,-rpath,/usr/local/onnxruntime-osx-arm64-1.18.1/lib
-
-// Linux용 (도커에서 사용)
-#cgo linux CFLAGS: -I/usr/local/onnxruntime/include
-#cgo linux LDFLAGS: -L/usr/local/onnxruntime/lib -lonnxruntime -Wl,-rpath,/usr/local/onnxruntime/lib
-
 // macOS용 (로컬 개발)
 #cgo darwin CFLAGS: -I/usr/local/onnxruntime-osx-arm64-1.18.1/include
 #cgo darwin LDFLAGS: -L/usr/local/onnxruntime-osx-arm64-1.18.1/lib -lonnxruntime -Wl,-rpath,/usr/local/onnxruntime-osx-arm64-1.18.1/lib
@@ -75,11 +68,11 @@ func main() {
 		log.Fatalf("사용법: %s <입력파일.mp4>", os.Args[0])
 	}
 
-	config, err := loadConfig()
-	if err != nil {
-		fmt.Printf("Error loading config: %s", err)
-		return
-	}
+	//config, err := loadConfig()
+	//if err != nil {
+	//	fmt.Printf("Error loading config: %s", err)
+	//	return
+	//}
 
 	totalStart := time.Now()
 	wavExtractStart := time.Now()
@@ -95,7 +88,9 @@ func main() {
 	fmt.Printf("📁 결과 오디오 파일: %s\n", wavAudioPath)
 
 	filterStart := time.Now()
-	resultFilterPath, err := VadFilter(wavAudioPath)
+	//var filterSegments []speech.Segment
+
+	_, resultFilterPath, err := VadFilter(wavAudioPath)
 	filterDuration := time.Since(filterStart)
 	fmt.Printf("⏱️ 무음구간 변환 시간: %v\n", filterDuration)
 	fmt.Printf("📁 결과 오디오 파일: %s\n", resultFilterPath)
@@ -111,13 +106,14 @@ func main() {
 	fmt.Printf("⏱️  오디오 추출 시간: %v\n", extractDuration)
 	fmt.Printf("📁 결과 오디오 파일: %s\n", audioPath)
 
-	apiStart := time.Now()
-
-	TranscribeAudio(config, audioPath)
-
-	apiDuration := time.Since(apiStart)
-	fmt.Printf("⏱️  API 호출 시간: %v\n", apiDuration)
-
+	//apiStart := time.Now()
+	//
+	//TranscribeAudio(config, audioPath, filterSegments)
+	////TranscribeAudio(config, audioPath, make([]speech.Segment, 0))
+	//
+	//apiDuration := time.Since(apiStart)
+	//fmt.Printf("⏱️  API 호출 시간: %v\n", apiDuration)
+	//
 	// 전체 실행 시간 계산
 	totalDuration := time.Since(totalStart)
 
@@ -127,7 +123,7 @@ func main() {
 	fmt.Println("========================================")
 	fmt.Printf("오디오 추출(mp4 to wav):     %8v (%5.1f%%)\n", wavExtractDuration, float64(wavExtractDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100)
 	fmt.Printf("오디오 변환(wav to webm):     %8v (%5.1f%%)\n", extractDuration, float64(extractDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100)
-	fmt.Printf("API 호출:       %8v (%5.1f%%)\n", apiDuration, float64(apiDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100)
+	//fmt.Printf("API 호출:       %8v (%5.1f%%)\n", apiDuration, float64(apiDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100)
 	fmt.Println("========================================")
 	fmt.Printf("전체 실행 시간:   %8v (100.0%%)\n", totalDuration)
 }

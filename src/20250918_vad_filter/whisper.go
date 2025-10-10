@@ -10,6 +10,9 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/streamer45/silero-vad-go/speech"
 )
 
 type WhisperResponse struct {
@@ -29,16 +32,18 @@ type Word struct {
 
 type Segment struct {
 	ID               int     `json:"id"`
+	Seek             int     `json:"seek"` // 세그먼트 찾을때 오프셋 값
 	Start            float64 `json:"start"`
 	End              float64 `json:"end"`
 	Text             string  `json:"text"`
-	AvgLogprob       float64 `json:"avg_logprob"`
-	CompressionRatio float64 `json:"compression_ratio"`
-	NoSpeechProb     float64 `json:"no_speech_prob"`
-	Words            []Word  `json:"words,omitempty"` // 세그먼트 안에 단어 단위가 들어오는 경우
+	AvgLogProb       float64 `json:"avg_logprob"`       // 평균 로그 확률값. -1보다 낮으면 확률 계산에 실패했다고 간주함
+	CompressionRatio float64 `json:"compression_ratio"` // 세그먼트 압축 비율. 2.4보다 크면 압축에 실패했다고 간주함
+	NoSpeechProb     float64 `json:"no_speech_prob"`    // 세그먼트 안에 말소리가 없을 확률
+	Temperature      float64 `json:"temperature"`       // 샘플링 온도(낮을수록 보수적인 결과)
+	Words            []Word  `json:"words,omitempty"`   // 세그먼트 안에 단어 단위가 들어오는 경우
 }
 
-func TranscribeAudio(config *Config, filePath string) {
+func TranscribeAudio(config *Config, filePath string, filterSpeech []speech.Segment) {
 	fileInfo, err := os.Stat(filePath)
 	if os.IsNotExist(err) {
 		fmt.Printf("파일을 찾을 수 없습니다: %s\n", filePath)
@@ -127,24 +132,44 @@ func TranscribeAudio(config *Config, filePath string) {
 		fmt.Printf("API 오류 (상태코드: %d): %s\n", resp.StatusCode, string(responseBody))
 	}
 
+	// 확장자를 제거한 base 파일명 생성
+	baseFileName := strings.TrimSuffix(filePath, filepath.Ext(filePath))
+	whisperJsonPath := baseFileName + "_whisper.json"
+	err = os.WriteFile(whisperJsonPath, responseBody, 0644)
+	if err != nil {
+		fmt.Printf("Whisper JSON 파일 저장 실패: %v\n", err)
+		return
+	}
+	fmt.Printf("Whisper JSON 파일 저장 완료: %s\n", whisperJsonPath)
+
 	var whisperResponse WhisperResponse
 	err = json.Unmarshal(responseBody, &whisperResponse)
 	if err != nil {
 		fmt.Printf("JSON 파싱 실패: %v\n", err)
 	}
 
-	fmt.Printf("result : [%+v]\n", whisperResponse)
+	subtitle := convertWhisperResponse(whisperResponse, filterSpeech)
 
-	jsonData, err := json.MarshalIndent(whisperResponse, "", "  ")
-	if err != nil {
-		fmt.Printf("JSON 마샬링 실패: %v\n", err)
-		return
+	jsonData, marshalErr := json.Marshal(subtitle)
+	if marshalErr != nil {
+		fmt.Errorf("marshal subtitle fail: %w", marshalErr)
 	}
 
-	filename := "whisper_output_prompt.json"
-	err = os.WriteFile(filename, jsonData, 0644)
+	// JSON 파일 저장
+	jsonFilePath := baseFileName + ".json"
+	err = os.WriteFile(jsonFilePath, jsonData, 0644)
 	if err != nil {
-		fmt.Printf("파일 저장 실패: %v\n", err)
+		fmt.Printf("JSON 파일 저장 실패: %v\n", err)
 		return
 	}
+	fmt.Printf("JSON 파일 저장 완료: %s\n", jsonFilePath)
+
+	srtData := convertSegmentToSrtFormat(subtitle)
+	srtFilePath := baseFileName + ".srt"
+	err = os.WriteFile(srtFilePath, srtData, 0644)
+	if err != nil {
+		fmt.Printf("SRT 파일 저장 실패: %v\n", err)
+		return
+	}
+	fmt.Printf("SRT 파일 저장 완료: %s\n", srtFilePath)
 }

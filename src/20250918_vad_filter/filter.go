@@ -11,7 +11,7 @@ import (
 	"github.com/streamer45/silero-vad-go/speech"
 )
 
-func VadFilter(wavAudioPath string) (string, error) {
+func VadFilter(wavAudioPath string) ([]speech.Segment, string, error) {
 	sd, err := speech.NewDetector(speech.DetectorConfig{
 		ModelPath:            "silero_vad.onnx",
 		SampleRate:           16000,
@@ -20,26 +20,26 @@ func VadFilter(wavAudioPath string) (string, error) {
 		SpeechPadMs:          30,
 	})
 	if err != nil {
-		return "", fmt.Errorf("VAD 디텍터 생성 실패: %w", err)
+		return nil, "", fmt.Errorf("VAD 디텍터 생성 실패: %w", err)
 	}
 	defer sd.Destroy()
 
 	inputFile, err := os.Open(wavAudioPath)
 	if err != nil {
-		return "", fmt.Errorf("입력 파일 열기 실패: %w", err)
+		return nil, "", fmt.Errorf("입력 파일 열기 실패: %w", err)
 	}
 	defer inputFile.Close()
 
 	// WAV 디코더 생성
 	dec := wav.NewDecoder(inputFile)
 	if !dec.IsValidFile() {
-		return "", fmt.Errorf("유효하지 않은 WAV 파일입니다")
+		return nil, "", fmt.Errorf("유효하지 않은 WAV 파일입니다")
 	}
 
 	// PCM 버퍼 읽기
 	buf, err := dec.FullPCMBuffer()
 	if err != nil {
-		return "", fmt.Errorf("PCM 버퍼 읽기 실패: %w", err)
+		return nil, "", fmt.Errorf("PCM 버퍼 읽기 실패: %w", err)
 	}
 
 	pcmBuf := buf.AsFloat32Buffer()
@@ -49,14 +49,73 @@ func VadFilter(wavAudioPath string) (string, error) {
 	fmt.Printf("채널 수: %d\n", buf.Format.NumChannels)
 	fmt.Printf("총 길이: %.2f초\n", float64(len(pcmBuf.Data))/float64(sampleRate))
 
+	// 오디오 데이터 범위 확인
+	minVal, maxVal := pcmBuf.Data[0], pcmBuf.Data[0]
+	for _, sample := range pcmBuf.Data {
+		if sample < minVal {
+			minVal = sample
+		}
+		if sample > maxVal {
+			maxVal = sample
+		}
+	}
+	fmt.Printf("🔍 PCM 데이터 범위: min=%.6f, max=%.6f\n", minVal, maxVal)
+
+	// 처음 몇 개 샘플 출력
+	fmt.Printf("🔍 처음 10개 샘플: ")
+	for i := 0; i < 10 && i < len(pcmBuf.Data); i++ {
+		fmt.Printf("%.6f ", pcmBuf.Data[i])
+	}
+	fmt.Println()
+
+	// 평균 절대값 계산 (음량 수준 파악)
+	var absSum float32
+	for _, sample := range pcmBuf.Data {
+		if sample < 0 {
+			absSum += -sample
+		} else {
+			absSum += sample
+		}
+	}
+	avgAbs := absSum / float32(len(pcmBuf.Data))
+	fmt.Printf("🔍 평균 절대값: %.6f\n", avgAbs)
+
 	// 음성 구간 탐지
 	fmt.Println("음성 구간을 탐지하는 중...")
-	segments, err := sd.Detect(pcmBuf.Data)
+	var segments []speech.Segment
+	segments, err = sd.Detect(pcmBuf.Data)
 	if err != nil {
-		return "", fmt.Errorf("음성 탐지 실패: %w", err)
+		return nil, "", fmt.Errorf("음성 탐지 실패: %w", err)
 	}
 
 	fmt.Printf("탐지된 음성 구간: %d개\n", len(segments))
+
+	// 후처리: 가까운 구간 병합
+	const maxGapSeconds = 0.5 // 0.5초 이내 간격이면 병합
+
+	mergedSegments := []speech.Segment{}
+	if len(segments) > 0 {
+		current := segments[0]
+
+		for i := 1; i < len(segments); i++ {
+			gap := segments[i].SpeechStartAt - current.SpeechEndAt
+
+			if gap <= maxGapSeconds {
+				// 간격이 짧으면 병합
+				current.SpeechEndAt = segments[i].SpeechEndAt
+			} else {
+				// 간격이 크면 현재 구간 저장하고 새로 시작
+				mergedSegments = append(mergedSegments, current)
+				current = segments[i]
+			}
+		}
+		// 마지막 구간 추가
+		mergedSegments = append(mergedSegments, current)
+	}
+
+	segments = mergedSegments
+	fmt.Printf("병합 후 음성 구간: %d개\n", len(segments))
+	// 병합 끝
 
 	// 원본 오디오 데이터를 복사 (전체 길이 유지)
 	processedAudio := make([]float32, len(pcmBuf.Data))
@@ -76,6 +135,8 @@ func VadFilter(wavAudioPath string) (string, error) {
 		for i, segment := range segments {
 			startSample := int(segment.SpeechStartAt * float64(sampleRate))
 			var endSample int
+
+			// fmt.Printf("SpeechStartAt : %f, SpeechEndAt : %f\n", segment.SpeechStartAt, segment.SpeechEndAt)
 
 			if segment.SpeechEndAt > 0 {
 				endSample = int(segment.SpeechEndAt * float64(sampleRate))
@@ -130,7 +191,7 @@ func VadFilter(wavAudioPath string) (string, error) {
 	// 출력 파일 생성
 	outputF, err := os.Create(outputFile)
 	if err != nil {
-		return "", fmt.Errorf("출력 파일 생성 실패: %w", err)
+		return nil, "", fmt.Errorf("출력 파일 생성 실패: %w", err)
 	}
 	defer outputF.Close()
 
@@ -156,17 +217,17 @@ func VadFilter(wavAudioPath string) (string, error) {
 
 	err = enc.Write(outputBuf)
 	if err != nil {
-		return "", fmt.Errorf("오디오 쓰기 실패: %w", err)
+		return nil, "", fmt.Errorf("오디오 쓰기 실패: %w", err)
 	}
 
 	err = enc.Close()
 	if err != nil {
-		return "", fmt.Errorf("인코더 닫기 실패: %w", err)
+		return nil, "", fmt.Errorf("인코더 닫기 실패: %w", err)
 	}
 
 	fmt.Printf("\n✅ 처리 완료!\n")
 	fmt.Printf("출력 파일: %s\n", outputFile)
 	fmt.Printf("📝 음성이 아닌 구간은 무음 처리되었습니다 (전체 길이 유지)\n")
 
-	return outputFile, nil
+	return segments, outputFile, nil
 }
