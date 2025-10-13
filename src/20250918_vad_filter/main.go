@@ -88,7 +88,6 @@ func main() {
 	fmt.Printf("📁 결과 오디오 파일: %s\n", wavAudioPath)
 
 	filterStart := time.Now()
-	//var filterSegments []speech.Segment
 
 	_, resultFilterPath, err := VadFilter(wavAudioPath)
 	filterDuration := time.Since(filterStart)
