@@ -40,6 +40,12 @@ type SegmentFilter struct {
 }
 
 func main() {
-	var job Job
-	fmt.Printf("Job struct 크기: %d bytes\n", unsafe.Sizeof(job))
+	var job Job      // job 자체: 352 bytes
+	jobPtr := &Job{} // jobPtr: 8 bytes (포인터)
+
+	fmt.Printf("Job 구조체 크기: %d bytes\n", unsafe.Sizeof(job))    // 352
+	fmt.Printf("Job 포인터 크기: %d bytes\n", unsafe.Sizeof(jobPtr)) // 8
+
+	// 실제 Job 구조체 크기 확인하려면
+	fmt.Printf("포인터가 가리키는 구조체 크기: %d bytes\n", unsafe.Sizeof(*jobPtr)) // 352
 }
