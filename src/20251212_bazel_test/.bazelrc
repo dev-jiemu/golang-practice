@@ -1,0 +1,16 @@
+# Enable Bzlmod (default in Bazel 8+)
+common --enable_bzlmod
+
+# Build with CGO enabled
+build --copt=-Werror=return-type
+
+# Use platforms
+build --incompatible_enable_cc_toolchain_resolution
+
+# macOS - ONNX Runtime 전역 경로 설정
+build --action_env=CGO_CFLAGS="-I/usr/local/onnxruntime-osx-arm64-1.18.1/include"
+build --action_env=CGO_LDFLAGS="-L/usr/local/onnxruntime-osx-arm64-1.18.1/lib -lonnxruntime"
+build --action_env=DYLD_LIBRARY_PATH="/usr/local/onnxruntime-osx-arm64-1.18.1/lib"
+
+# Output directory
+build --symlink_prefix=bazel-

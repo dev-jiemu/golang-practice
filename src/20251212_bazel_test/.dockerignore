@@ -1,0 +1,8 @@
+.git
+.idea
+*.md
+bazel-*
+.bazel*
+*.sum
+go.mod
+Makefile

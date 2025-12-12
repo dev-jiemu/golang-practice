@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@gazelle//:def.bzl", "gazelle")
+# load("@rules_oci//oci:defs.bzl", "oci_image", "oci_push", "oci_tarball")
+
+# gazelle:prefix github.com/example/vad-filter-test
+gazelle(name = "gazelle")
+
+go_library(
+    name = "vad_filter_lib",
+    srcs = [
+        "main.go",
+        "cgo_darwin.go",
+        "cgo_linux.go",
+    ],
+    importpath = "github.com/example/vad-filter-test",
+    visibility = ["//visibility:private"],
+    cgo = True,
+    deps = [
+        "@com_github_streamer45_silero_vad_go//speech",
+    ],
+)
+
+go_binary(
+    name = "vad_filter_test",
+    embed = [":vad_filter_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# ============================================
+# Docker 관련 (나중에 사용)
+# ============================================
+# # OCI (Docker) image using rules_oci
+# oci_image(
+#     name = "vad_filter_image",
+#     base = "@distroless_base",
+#     entrypoint = ["/vad_filter_test"],
+#     tars = [":vad_filter_test_layer"],
+# )
+#
+# # Create layer with binary
+# oci_tarball(
+#     name = "vad_filter_test_layer",
+#     image = ":vad_filter_image",
+#     repo_tags = ["vad-filter-test:latest"],
+# )
+#
+# # Push to Docker Hub
+# oci_push(
+#     name = "push_image",
+#     image = ":vad_filter_image",
+#     repository = "index.docker.io/your-dockerhub-username/vad-filter-test",
+#     remote_tags = ["latest"],
+# )
