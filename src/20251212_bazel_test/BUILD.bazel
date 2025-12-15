@@ -1,53 +1,52 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("@gazelle//:def.bzl", "gazelle")
-# load("@rules_oci//oci:defs.bzl", "oci_image", "oci_push", "oci_tarball")
 
 # gazelle:prefix github.com/example/vad-filter-test
+# gazelle:resolve go github.com/streamer45/silero-vad-go/speech @com_github_streamer45_silero_vad_go//speech
 gazelle(name = "gazelle")
+
+# 플랫폼별 설정
+config_setting(
+    name = "darwin_arm64",
+    constraint_values = ["@platforms//os:osx", "@platforms//cpu:arm64"],
+)
+
+config_setting(
+    name = "linux_x64",
+    constraint_values = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+)
+
+# ONNX Runtime 자동 선택
+alias(
+    name = "onnxruntime_lib",
+    actual = select({
+        ":darwin_arm64": "@onnxruntime_darwin_arm64//:onnxruntime",
+        ":linux_x64": "@onnxruntime_linux_x64//:onnxruntime",
+        "//conditions:default": "@onnxruntime_darwin_arm64//:onnxruntime",
+    }),
+)
+
+# ONNX Runtime 런타임 라이브러리 자동 선택
+alias(
+    name = "onnxruntime_runtime_libs",
+    actual = select({
+        ":darwin_arm64": "@onnxruntime_darwin_arm64//:runtime_libs",
+        ":linux_x64": "@onnxruntime_linux_x64//:runtime_libs",
+        "//conditions:default": "@onnxruntime_darwin_arm64//:runtime_libs",
+    }),
+)
 
 go_library(
     name = "vad_filter_lib",
-    srcs = [
-        "main.go",
-        "cgo_darwin.go",
-        "cgo_linux.go",
-    ],
+    srcs = ["main.go", "cgo_darwin.go", "cgo_linux.go"],
     importpath = "github.com/example/vad-filter-test",
-    visibility = ["//visibility:private"],
     cgo = True,
-    deps = [
-        "@com_github_streamer45_silero_vad_go//speech",
-    ],
+    cdeps = [":onnxruntime_lib"],  # Bazel이 자동으로 링크
+    deps = ["@com_github_streamer45_silero_vad_go//speech"],
 )
 
 go_binary(
     name = "vad_filter_test",
     embed = [":vad_filter_lib"],
-    visibility = ["//visibility:public"],
+    data = [":onnxruntime_runtime_libs"],  # alias 사용으로 간소화
 )
-
-# ============================================
-# Docker 관련 (나중에 사용)
-# ============================================
-# # OCI (Docker) image using rules_oci
-# oci_image(
-#     name = "vad_filter_image",
-#     base = "@distroless_base",
-#     entrypoint = ["/vad_filter_test"],
-#     tars = [":vad_filter_test_layer"],
-# )
-#
-# # Create layer with binary
-# oci_tarball(
-#     name = "vad_filter_test_layer",
-#     image = ":vad_filter_image",
-#     repo_tags = ["vad-filter-test:latest"],
-# )
-#
-# # Push to Docker Hub
-# oci_push(
-#     name = "push_image",
-#     image = ":vad_filter_image",
-#     repository = "index.docker.io/your-dockerhub-username/vad-filter-test",
-#     remote_tags = ["latest"],
-# )

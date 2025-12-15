@@ -1,16 +1,54 @@
-# Enable Bzlmod (default in Bazel 8+)
+# Enable Bzlmod (WORKSPACE와 자동으로 공존)
 common --enable_bzlmod
 
-# Build with CGO enabled
-build --copt=-Werror=return-type
+# Bazel 8에서 WORKSPACE 활성화 (ONNX Runtime http_archive 사용을 위해)
+common --enable_workspace
 
-# Use platforms
+# CGO 설정
+build --action_env=CGO_ENABLED=1
+
+# 플랫폼 설정
 build --incompatible_enable_cc_toolchain_resolution
+build --spawn_strategy=standalone
+build --verbose_failures
 
-# macOS - ONNX Runtime 전역 경로 설정
-build --action_env=CGO_CFLAGS="-I/usr/local/onnxruntime-osx-arm64-1.18.1/include"
-build --action_env=CGO_LDFLAGS="-L/usr/local/onnxruntime-osx-arm64-1.18.1/lib -lonnxruntime"
-build --action_env=DYLD_LIBRARY_PATH="/usr/local/onnxruntime-osx-arm64-1.18.1/lib"
+# ============================================
+# 플랫폼별 ONNX Runtime 헤더/라이브러리 경로
+# ============================================
 
-# Output directory
-build --symlink_prefix=bazel-
+# macOS ARM64 설정
+build:darwin_arm64 --copt=-Iexternal/onnxruntime_darwin_arm64/include
+build:darwin_arm64 --linkopt=-Lexternal/onnxruntime_darwin_arm64/lib
+build:darwin_arm64 --linkopt=-lonnxruntime
+
+# macOS x64 설정
+build:darwin_x64 --copt=-Iexternal/onnxruntime_darwin_x64/include
+build:darwin_x64 --linkopt=-Lexternal/onnxruntime_darwin_x64/lib
+build:darwin_x64 --linkopt=-lonnxruntime
+
+# Linux x64 설정
+build:linux_x64 --copt=-Iexternal/onnxruntime_linux_x64/include
+build:linux_x64 --linkopt=-Lexternal/onnxruntime_linux_x64/lib
+build:linux_x64 --linkopt=-lonnxruntime
+
+# Linux ARM64 설정
+build:linux_arm64 --copt=-Iexternal/onnxruntime_linux_arm64/include
+build:linux_arm64 --linkopt=-Lexternal/onnxruntime_linux_arm64/lib
+build:linux_arm64 --linkopt=-lonnxruntime
+
+# ============================================
+# 플랫폼 자동 감지
+# ============================================
+# Bazel이 자동으로 OS를 감지하여 적절한 config 적용
+build --enable_platform_specific_config
+
+# macOS에서 자동으로 darwin_arm64 config 사용
+build:macos --copt=-Iexternal/onnxruntime_darwin_arm64/include
+build:macos --linkopt=-Lexternal/onnxruntime_darwin_arm64/lib
+build:macos --linkopt=-lonnxruntime
+
+# Linux에서 자동으로 linux_x64 config 사용
+build:linux --copt=-Iexternal/onnxruntime_linux_x64/include
+build:linux --linkopt=-Lexternal/onnxruntime_linux_x64/lib
+build:linux --linkopt=-lonnxruntime
+build:linux --linkopt=-Wl,-rpath,$$ORIGIN/../lib
