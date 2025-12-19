@@ -8,13 +8,13 @@ package main
 import "C"
 import (
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"sort"
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
-	"github.com/labstack/gommon/log"
 	"github.com/streamer45/silero-vad-go/speech"
 )
 
@@ -67,12 +67,13 @@ func VadFilter(config *speech.DetectorConfig, job *Job) ([]speech.Segment, *VADS
 	if config.SpeechPadMs == 0 && config.MinSilenceDurationMs == 0 {
 		matrics := estimateFileLevelPadAndMinSilence(pcmBuf.Data, sampleRate)
 		// SNRdB 10 이하, AvgSilenceSec 1.0 이상이 필터?
-		log.Debug("Audio quality metrics", "snr_db", matrics.SNRdB, "avg_silence_sec", matrics.AvgSilenceSec)
+		log.Printf("[DEBUG] Audio quality metrics: snr_db=%.2f, avg_silence_sec=%.2f\n", matrics.SNRdB, matrics.AvgSilenceSec)
 		config.SpeechPadMs = matrics.FinalPadMs
 		config.MinSilenceDurationMs = matrics.SuggestedMinSilenceMs
 	}
 
-	log.Debug("vad filter results", "speech_pad_ms", config.SpeechPadMs, "min_silence_duration_ms", config.MinSilenceDurationMs, "sample_rate", config.SampleRate)
+	log.Printf("[DEBUG] VAD filter results: speech_pad_ms=%d, min_silence_duration_ms=%d, sample_rate=%d\n",
+		config.SpeechPadMs, config.MinSilenceDurationMs, config.SampleRate)
 
 	var sd *speech.Detector
 	sd, err = speech.NewDetector(*config)
@@ -88,26 +89,26 @@ func VadFilter(config *speech.DetectorConfig, job *Job) ([]speech.Segment, *VADS
 	}
 
 	// ===== 디버깅 로그 추가 시작 =====
-	log.Info("========================================")
-	log.Infof("=== VAD Filter Debug: Step by Step ===")
-	log.Info("========================================")
+	log.Println("========================================")
+	log.Println("=== VAD Filter Debug: Step by Step ===")
+	log.Println("========================================")
 
 	rawSegmentCount := len(segments)
-	log.Infof("Step 0: Raw VAD Detection")
-	log.Infof("  - Segments: %d", rawSegmentCount)
-	log.Infof("  - Threshold: %.2f", config.Threshold)
+	log.Println("Step 0: Raw VAD Detection")
+	log.Printf("  - Segments: %d\n", rawSegmentCount)
+	log.Printf("  - Threshold: %.2f\n", config.Threshold)
 
 	if len(segments) > 0 {
-		log.Infof("  - First segment: %.3fs - %.3fs (%.2fs)",
+		log.Printf("  - First segment: %.3fs - %.3fs (%.2fs)\n",
 			segments[0].SpeechStartAt,
 			segments[0].SpeechEndAt,
 			segments[0].SpeechEndAt-segments[0].SpeechStartAt)
-		log.Infof("  - Last segment: %.3fs - %.3fs (%.2fs)",
+		log.Printf("  - Last segment: %.3fs - %.3fs (%.2fs)\n",
 			segments[len(segments)-1].SpeechStartAt,
 			segments[len(segments)-1].SpeechEndAt,
 			segments[len(segments)-1].SpeechEndAt-segments[len(segments)-1].SpeechStartAt)
 	}
-	log.Info("----------------------------------------")
+	log.Println("----------------------------------------")
 
 	rawSegments := make([]speech.Segment, len(segments))
 	copy(rawSegments, segments)
@@ -128,7 +129,8 @@ func VadFilter(config *speech.DetectorConfig, job *Job) ([]speech.Segment, *VADS
 
 		// duration이 여전히 이상하면 스킵
 		if duration < 0 {
-			log.Debug("비정상 세그먼트 스킵", "start", seg.SpeechStartAt, "end", seg.SpeechEndAt, "duration", duration)
+			log.Printf("[DEBUG] 비정상 세그먼트 스킵: start=%.3f, end=%.3f, duration=%.3f\n",
+				seg.SpeechStartAt, seg.SpeechEndAt, duration)
 			removedByDuration++
 			continue
 		}
@@ -143,81 +145,43 @@ func VadFilter(config *speech.DetectorConfig, job *Job) ([]speech.Segment, *VADS
 		}
 	}
 
-	log.Infof("Step 1: Duration Filter (>= 0.2s)")
-	log.Infof("  - Remaining: %d (removed: %d)", len(filteredSegments), removedByDuration)
-	log.Info("----------------------------------------")
+	log.Printf("Step 1: Duration Filter (>= 0.2s)\n")
+	log.Printf("  - Remaining: %d (removed: %d)\n", len(filteredSegments), removedByDuration)
+	log.Println("----------------------------------------")
 	segments = filteredSegments
 
 	beforeMerge := len(segments)
 	segments = mergeCloseSegments(segments, 1.5)
-	log.Infof("Step 2: Merge Close Segments (<= 1.5s gap)")
-	log.Infof("  - Before: %d, After: %d (merged: %d)", beforeMerge, len(segments), beforeMerge-len(segments))
-	log.Infof("  - Average duration: %.2fs", calculateAvgDuration(segments))
-	log.Info("----------------------------------------")
+	log.Printf("Step 2: Merge Close Segments (<= 1.5s gap)\n")
+	log.Printf("  - Before: %d, After: %d (merged: %d)\n", beforeMerge, len(segments), beforeMerge-len(segments))
+	log.Printf("  - Average duration: %.2fs\n", calculateAvgDuration(segments))
+	log.Println("----------------------------------------")
 
 	// 히스테리시스 효과 : 짧은 무성 병합
 	beforeShortGap := len(segments)
 	segments = mergeShortGaps(segments, 600)
-	log.Infof("Step 3: Merge Short Gaps (<= 600ms)")
-	log.Infof("  - Before: %d, After: %d (merged: %d)", beforeShortGap, len(segments), beforeShortGap-len(segments))
-	log.Info("----------------------------------------")
+	log.Printf("Step 3: Merge Short Gaps (<= 600ms)\n")
+	log.Printf("  - Before: %d, After: %d (merged: %d)\n", beforeShortGap, len(segments), beforeShortGap-len(segments))
+	log.Println("----------------------------------------")
 
 	// 진짜 짧은거 자르기
 	beforeDropShort := len(segments)
 	segments = dropShortSpeech(segments, 120)
-	log.Infof("Step 4: Drop Short Speech (< 120ms)")
-	log.Infof("  - Before: %d, After: %d (removed: %d)", beforeDropShort, len(segments), beforeDropShort-len(segments))
-	log.Info("----------------------------------------")
+	log.Printf("Step 4: Drop Short Speech (< 120ms)\n")
+	log.Printf("  - Before: %d, After: %d (removed: %d)\n", beforeDropShort, len(segments), beforeDropShort-len(segments))
+	log.Println("----------------------------------------")
 
 	// 비대칭 패딩
 	beforePadding := len(segments)
 	segments = applyAsymmetricPaddingToSegments(segments, sampleRate, 300, 500)
-	log.Infof("Step 5: Apply Padding (pre: 300ms, post: 500ms)")
-	log.Infof("  - Before: %d, After: %d", beforePadding, len(segments))
-	log.Infof("  - Average duration: %.2fs", calculateAvgDuration(segments))
-	log.Info("----------------------------------------")
+	log.Printf("Step 5: Apply Padding (pre: 300ms, post: 500ms)\n")
+	log.Printf("  - Before: %d, After: %d\n", beforePadding, len(segments))
+	log.Printf("  - Average duration: %.2fs\n", calculateAvgDuration(segments))
+	log.Println("----------------------------------------")
+	log.Println("========================================")
 
-	// 특정 구간 (42~50초) 상세 분석
-	// TODO : 특정 발화구간이 사라져서 데이터 체크용임
-	log.Info("=== Analyzing 42s-50s region ===")
-	targetStart := 42.0
-	targetEnd := 50.0
-
-	log.Infof("Raw VAD segments in region:")
-	foundInRaw := false
-	for i, seg := range rawSegments { // ← 이게 sd.Detect() 직후의 원본
-		if seg.SpeechEndAt >= 40.0 && seg.SpeechStartAt <= 52.0 {
-			inTarget := ""
-			if seg.SpeechEndAt >= targetStart && seg.SpeechStartAt <= targetEnd {
-				inTarget = " ← TARGET REGION"
-			}
-			log.Infof("  [Raw #%d] %.3fs - %.3fs (%.2fs)%s",
-				i, seg.SpeechStartAt, seg.SpeechEndAt,
-				seg.SpeechEndAt-seg.SpeechStartAt, inTarget)
-		}
-	}
-	if !foundInRaw {
-		log.Warn("  ⚠️  NO segments detected by VAD in this region!")
-	}
-
-	log.Infof("Final segments in region:")
-	foundInFinal := false
-	for i, seg := range segments {
-		if seg.SpeechEndAt >= targetStart && seg.SpeechStartAt <= targetEnd {
-			log.Infof("  [Final #%d] %.3fs - %.3fs (%.2fs)",
-				i, seg.SpeechStartAt, seg.SpeechEndAt, seg.SpeechEndAt-seg.SpeechStartAt)
-			foundInFinal = true
-		}
-	}
-	if !foundInFinal {
-		log.Warn("  ⚠️  NO segments survived filtering in this region!")
-	}
-	log.Info("========================================")
-
-	log.Debug("post smooth/pad/chunk",
-		"segments", len(segments),
-		"avg_duration", fmt.Sprintf("%.2f", calculateAvgDuration(segments)),
-	)
+	log.Printf("[DEBUG] Post smooth/pad/chunk: segments=%d, avg_duration=%.2f\n",
+		len(segments), calculateAvgDuration(segments))
 
 	// 원본 오디오 데이터를 복사 (전체 길이 유지)
 	processedAudio := make([]float32, len(pcmBuf.Data))
@@ -229,7 +193,7 @@ func VadFilter(config *speech.DetectorConfig, job *Job) ([]speech.Segment, *VADS
 		originalSum += float64(v * v)
 	}
 	originalRMS := math.Sqrt(originalSum / float64(len(pcmBuf.Data)))
-	log.Debug("Before VAD filter", "original_rms", fmt.Sprintf("%.6f", originalRMS))
+	log.Printf("[DEBUG] Before VAD filter: original_rms=%.6f\n", originalRMS)
 
 	rms20ms10ms := frameRMS(pcmBuf.Data, sampleRate, 0.020, 0.010)
 	noise := percentile(rms20ms10ms, 20) // 노이즈 바닥
@@ -304,11 +268,8 @@ func VadFilter(config *speech.DetectorConfig, job *Job) ([]speech.Segment, *VADS
 		}
 	}
 	processedRMS := math.Sqrt(processedSum / float64(len(processedAudio)))
-	log.Debug("After VAD filter",
-		"processed_rms", fmt.Sprintf("%.6f", processedRMS),
-		"zero_samples", zeroCount,
-		"zero_ratio", fmt.Sprintf("%.2f%%", float64(zeroCount)/float64(len(processedAudio))*100),
-	)
+	log.Printf("[DEBUG] After VAD filter: processed_rms=%.6f, zero_samples=%d, zero_ratio=%.2f%%\n",
+		processedRMS, zeroCount, float64(zeroCount)/float64(len(processedAudio))*100)
 
 	var outputFile *os.File
 	outputFile, err = os.Create(job.FilteredAudioPath)
@@ -409,16 +370,14 @@ func VadFilterDetectOnly(config *speech.DetectorConfig, job *Job) ([]speech.Segm
 	// Pad와 MinSilence 설정
 	if config.SpeechPadMs == 0 && config.MinSilenceDurationMs == 0 {
 		metrics := estimateFileLevelPadAndMinSilence(pcmBuf.Data, sampleRate)
-		log.Debug("Audio quality metrics", "snr_db", metrics.SNRdB, "avg_silence_sec", metrics.AvgSilenceSec)
+		log.Printf("[DEBUG] Audio quality metrics: snr_db=%.2f, avg_silence_sec=%.2f\n",
+			metrics.SNRdB, metrics.AvgSilenceSec)
 		config.SpeechPadMs = metrics.FinalPadMs
 		config.MinSilenceDurationMs = metrics.SuggestedMinSilenceMs
 	}
 
-	log.Debug("VAD detection config",
-		"speech_pad_ms", config.SpeechPadMs,
-		"min_silence_duration_ms", config.MinSilenceDurationMs,
-		"sample_rate", config.SampleRate,
-		"threshold", config.Threshold)
+	log.Printf("[DEBUG] VAD detection config: speech_pad_ms=%d, min_silence_duration_ms=%d, sample_rate=%d, threshold=%.2f\n",
+		config.SpeechPadMs, config.MinSilenceDurationMs, config.SampleRate, config.Threshold)
 
 	// VAD Detector 생성
 	var sd *speech.Detector
@@ -435,23 +394,23 @@ func VadFilterDetectOnly(config *speech.DetectorConfig, job *Job) ([]speech.Segm
 		return nil, 0, fmt.Errorf("failed to detect PCM segments: %v", err)
 	}
 
-	log.Info("========================================")
-	log.Infof("=== VAD Detection Results ===")
-	log.Info("========================================")
-	log.Infof("Raw segments detected: %d", len(segments))
-	log.Infof("Threshold: %.2f", config.Threshold)
+	log.Println("========================================")
+	log.Println("=== VAD Detection Results ===")
+	log.Println("========================================")
+	log.Printf("Raw segments detected: %d\n", len(segments))
+	log.Printf("Threshold: %.2f\n", config.Threshold)
 
 	if len(segments) > 0 {
-		log.Infof("First segment: %.3fs - %.3fs (%.2fs)",
+		log.Printf("First segment: %.3fs - %.3fs (%.2fs)\n",
 			segments[0].SpeechStartAt,
 			segments[0].SpeechEndAt,
 			segments[0].SpeechEndAt-segments[0].SpeechStartAt)
-		log.Infof("Last segment: %.3fs - %.3fs (%.2fs)",
+		log.Printf("Last segment: %.3fs - %.3fs (%.2fs)\n",
 			segments[len(segments)-1].SpeechStartAt,
 			segments[len(segments)-1].SpeechEndAt,
 			segments[len(segments)-1].SpeechEndAt-segments[len(segments)-1].SpeechStartAt)
 	}
-	log.Info("----------------------------------------")
+	log.Println("----------------------------------------")
 
 	// 후처리 단계
 	rawSegments := make([]speech.Segment, len(segments))
@@ -470,7 +429,8 @@ func VadFilterDetectOnly(config *speech.DetectorConfig, job *Job) ([]speech.Segm
 		duration := endTime - seg.SpeechStartAt
 
 		if duration < 0 {
-			log.Debug("Invalid segment skipped", "start", seg.SpeechStartAt, "end", seg.SpeechEndAt)
+			log.Printf("[DEBUG] Invalid segment skipped: start=%.3f, end=%.3f\n",
+				seg.SpeechStartAt, seg.SpeechEndAt)
 			removedByDuration++
 			continue
 		}
@@ -484,41 +444,41 @@ func VadFilterDetectOnly(config *speech.DetectorConfig, job *Job) ([]speech.Segm
 		}
 	}
 
-	log.Infof("Step 1: Duration Filter (>= 0.2s)")
-	log.Infof("  Remaining: %d (removed: %d)", len(filteredSegments), removedByDuration)
+	log.Printf("Step 1: Duration Filter (>= 0.2s)\n")
+	log.Printf("  Remaining: %d (removed: %d)\n", len(filteredSegments), removedByDuration)
 	segments = filteredSegments
 
 	// 2. 가까운 세그먼트 병합 (1.5초 이내)
 	beforeMerge := len(segments)
 	segments = mergeCloseSegments(segments, 1.5)
-	log.Infof("Step 2: Merge Close Segments (<= 1.5s gap)")
-	log.Infof("  Before: %d, After: %d (merged: %d)", beforeMerge, len(segments), beforeMerge-len(segments))
-	log.Infof("  Average duration: %.2fs", calculateAvgDuration(segments))
+	log.Printf("Step 2: Merge Close Segments (<= 1.5s gap)\n")
+	log.Printf("  Before: %d, After: %d (merged: %d)\n", beforeMerge, len(segments), beforeMerge-len(segments))
+	log.Printf("  Average duration: %.2fs\n", calculateAvgDuration(segments))
 
 	// 3. 짧은 무성 병합 (600ms 이내)
 	beforeShortGap := len(segments)
 	segments = mergeShortGaps(segments, 600)
-	log.Infof("Step 3: Merge Short Gaps (<= 600ms)")
-	log.Infof("  Before: %d, After: %d (merged: %d)", beforeShortGap, len(segments), beforeShortGap-len(segments))
+	log.Printf("Step 3: Merge Short Gaps (<= 600ms)\n")
+	log.Printf("  Before: %d, After: %d (merged: %d)\n", beforeShortGap, len(segments), beforeShortGap-len(segments))
 
 	// 4. 짧은 발화 제거 (120ms 미만)
 	beforeDropShort := len(segments)
 	segments = dropShortSpeech(segments, 120)
-	log.Infof("Step 4: Drop Short Speech (< 120ms)")
-	log.Infof("  Before: %d, After: %d (removed: %d)", beforeDropShort, len(segments), beforeDropShort-len(segments))
+	log.Printf("Step 4: Drop Short Speech (< 120ms)\n")
+	log.Printf("  Before: %d, After: %d (removed: %d)\n", beforeDropShort, len(segments), beforeDropShort-len(segments))
 
 	// 5. 비대칭 패딩 (앞 300ms, 뒤 500ms)
 	beforePadding := len(segments)
 	segments = applyAsymmetricPaddingToSegments(segments, sampleRate, 300, 500)
-	log.Infof("Step 5: Apply Padding (pre: 300ms, post: 500ms)")
-	log.Infof("  Before: %d, After: %d", beforePadding, len(segments))
-	log.Infof("  Average duration: %.2fs", calculateAvgDuration(segments))
-	log.Info("========================================")
+	log.Printf("Step 5: Apply Padding (pre: 300ms, post: 500ms)\n")
+	log.Printf("  Before: %d, After: %d\n", beforePadding, len(segments))
+	log.Printf("  Average duration: %.2fs\n", calculateAvgDuration(segments))
+	log.Println("========================================")
 
 	totalDuration := float64(len(pcmBuf.Data)) / float64(sampleRate)
 
-	log.Infof("Final VAD segments: %d", len(segments))
-	log.Infof("Total audio duration: %.2fs", totalDuration)
+	log.Printf("Final VAD segments: %d\n", len(segments))
+	log.Printf("Total audio duration: %.2fs\n", totalDuration)
 
 	return segments, totalDuration, nil
 }

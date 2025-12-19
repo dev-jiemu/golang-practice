@@ -1,18 +1,30 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/streamer45/silero-vad-go/speech"
 )
 
 type Config struct {
 	OpenAIKey string `json:"openai-key"`
+}
+
+type ChunkResult struct {
+	Chunk              AudioChunk
+	ChunkPath          string
+	WhisperResponse    *WhisperResponse
+	TranscriptionError error
+	Error              error
+	Duration           time.Duration
 }
 
 func LoadConfig() error {
@@ -87,16 +99,172 @@ func main() {
 		log.Printf("Warning: Failed to save chunk info: %v\n", err)
 	}
 
-	for _, chunk := range chunks {
-		chunkPath, err := ExtractChunkAudio(job.WavAudioPath, chunk, outputDir)
-		if err != nil {
-			log.Printf("Error extracting chunk #%d: %v\n", chunk.Index, err)
-			continue
-		}
-		log.Printf("✓ Chunk #%d saved: %s\n", chunk.Index, chunkPath)
+	// 리소스 모니터 초기화
+	monitor := NewResourceMonitor()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 500ms 마다 리소스 수집
+	monitor.StartMonitoring(ctx, 500*time.Millisecond)
+	monitor.SetTotalChunks(len(chunks))
+
+	// 청크 작업을 전달할 채널과 결과를 받을 채널
+	chunkJobs := make(chan AudioChunk, len(chunks))
+	results := make(chan ChunkResult, len(chunks))
+
+	// 워커 수 (CPU 코어 수만큼 또는 원하는 수로 설정)
+	numWorkers := 3
+	if len(chunks) < numWorkers {
+		numWorkers = len(chunks)
 	}
 
-	log.Printf("All chunks saved to: %s\n", outputDir)
+	// CPU 코어 수 기반 자동 조정 옵션
+	// numWorkers = runtime.NumCPU() / 2 // CPU 코어의 절반만 사용
+
+	log.Printf("🚀 Starting chunk processing with %d workers (CPU cores: %d)\n", numWorkers, runtime.NumCPU())
+
+	translator := NewTranslatorWhisper(segments)
+
+	// 워커 고루틴 시작
+	for w := 0; w < numWorkers; w++ {
+		go func(workerID int) {
+			monitor.WorkerStart(workerID)
+			defer monitor.WorkerEnd(workerID)
+
+			for chunk := range chunkJobs {
+				chunkStartTime := time.Now()
+				log.Printf("[Worker %d] Processing chunk #%d (%.2fs - %.2fs)\n",
+					workerID, chunk.Index, chunk.StartSec, chunk.EndSec)
+
+				result := ChunkResult{
+					Chunk:    chunk,
+					Duration: 0,
+				}
+
+				// 1. 청크 오디오 파일 생성
+				chunkPath, err := ExtractChunkAudio(job.WavAudioPath, chunk, outputDir)
+				result.ChunkPath = chunkPath
+
+				if err != nil {
+					result.Error = err
+					result.Duration = time.Since(chunkStartTime)
+					monitor.ChunkProcessed(false, result.Duration)
+					results <- result
+					continue
+				}
+
+				log.Printf("[Worker %d] Chunk #%d file created, calling Whisper API...\n", workerID, chunk.Index)
+
+				// 2. Whisper API 호출 (webm 변환 포함)
+				webmPath := strings.TrimSuffix(chunkPath, filepath.Ext(chunkPath)) + ".webm"
+
+				// WAV -> WebM 변환
+				extractErr := ExtractAudio(ctx, chunkPath, webmPath)
+				if extractErr != nil {
+					result.TranscriptionError = fmt.Errorf("webm conversion failed: %w", extractErr)
+					result.Duration = time.Since(chunkStartTime)
+					monitor.ChunkProcessed(false, result.Duration)
+					results <- result
+					continue
+				}
+
+				// Whisper API 호출
+				whisperResp, whisperErr := translator.CallWhisperApi(ctx, webmPath, job)
+				result.WhisperResponse = whisperResp
+				result.TranscriptionError = whisperErr
+
+				if whisperErr != nil {
+					log.Printf("[Worker %d] ⚠️  Chunk #%d Whisper API failed: %v\n", workerID, chunk.Index, whisperErr)
+				} else {
+					log.Printf("[Worker %d] ✓ Chunk #%d transcription completed (%d segments)\n",
+						workerID, chunk.Index, len(whisperResp.Segments))
+				}
+
+				result.Duration = time.Since(chunkStartTime)
+				monitor.ChunkProcessed(whisperErr == nil && err == nil, result.Duration)
+
+				results <- result
+			}
+		}(w)
+	}
+
+	// 모든 청크를 작업 채널에 전송
+	for _, chunk := range chunks {
+		chunkJobs <- chunk
+	}
+	close(chunkJobs) // 더 이상 작업이 없음을 알림
+
+	// 결과 수집 + 주기적 진행상황 출력
+	successChunks := make([]ChunkResult, 0)
+	failedChunks := make([]ChunkResult, 0)
+
+	progressTicker := time.NewTicker(2 * time.Second)
+	defer progressTicker.Stop()
+
+	receivedCount := 0
+	for receivedCount < len(chunks) {
+		select {
+		case result := <-results:
+			receivedCount++
+			if result.Error != nil || result.TranscriptionError != nil {
+				log.Printf("✗ Chunk #%d failed (took %s)\n",
+					result.Chunk.Index, result.Duration.Round(time.Millisecond))
+				if result.Error != nil {
+					log.Printf("  File error: %v\n", result.Error)
+				}
+				if result.TranscriptionError != nil {
+					log.Printf("  Whisper error: %v\n", result.TranscriptionError)
+				}
+				failedChunks = append(failedChunks, result)
+			} else {
+				log.Printf("✓ Chunk #%d completed (took %s): %s\n",
+					result.Chunk.Index, result.Duration.Round(time.Millisecond), result.ChunkPath)
+				successChunks = append(successChunks, result)
+			}
+
+		case <-progressTicker.C:
+			monitor.PrintProgress()
+		}
+	}
+
+	// 최종 모니터링 요약
+	monitor.PrintSummary()
+
+	// 최종 결과 출력
+	log.Printf("===== Chunk Processing Summary =====\n")
+	log.Printf("Total chunks: %d\n", len(chunks))
+	log.Printf("Success: %d\n", len(successChunks))
+	log.Printf("Failed: %d\n", len(failedChunks))
+
+	if len(failedChunks) > 0 {
+		log.Printf("Failed chunks:\n")
+		for _, failed := range failedChunks {
+			log.Printf("  - Chunk #%d\n", failed.Chunk.Index)
+			if failed.Error != nil {
+				log.Printf("    Error: %v\n", failed.Error)
+			}
+			if failed.TranscriptionError != nil {
+				log.Printf("    Transcription: %v\n", failed.TranscriptionError)
+			}
+		}
+	}
+
+	// 3. 타임스탬프 보정 및 자막 통합
+	if len(successChunks) > 0 {
+		log.Println("===== Merging Transcriptions =====")
+		allSubtitles := MergeChunkTranscriptions(successChunks, translator)
+
+		// 4. JSON 저장
+		outputJSON := filepath.Join(outputDir, "transcription.json")
+		if err := SaveTranscriptionJSON(allSubtitles, outputJSON); err != nil {
+			log.Printf("❌ Failed to save transcription JSON: %v\n", err)
+		} else {
+			log.Printf("✅ Transcription saved to: %s\n", outputJSON)
+			log.Printf("   Total subtitle segments: %d\n", len(allSubtitles))
+		}
+	} else {
+		log.Println("\n⚠️  No successful chunks to merge")
+	}
 }
 
 func CreateAudioChunks(vadSegments []speech.Segment, config ChunkingConfig, totalDurationSec float64) []AudioChunk {
@@ -205,5 +373,66 @@ func SaveChunkInfo(chunks []AudioChunk, outputDir string) error {
 	}
 
 	log.Printf("Chunk info saved to: %s\n", infoPath)
+	return nil
+}
+
+// MergeChunkTranscriptions : 청크별 Whisper 응답을 타임스탬프 보정하여 통합
+func MergeChunkTranscriptions(chunkResults []ChunkResult, translator *TranslatorWhisper) []SubtitleSegment {
+	allSubtitles := make([]SubtitleSegment, 0)
+
+	for _, result := range chunkResults {
+		if result.WhisperResponse == nil {
+			continue
+		}
+
+		// 청크 시작 시간 (타임스탬프 오프셋)
+		timeOffset := result.Chunk.StartSec
+
+		log.Printf("Processing chunk #%d (offset: %.2fs, segments: %d)\n",
+			result.Chunk.Index, timeOffset, len(result.WhisperResponse.Segments))
+
+		// Whisper 응답을 자막 형식으로 변환
+		subtitles := translator.ConvertWhisperResponse(result.WhisperResponse)
+
+		// 타임스탬프 보정: 청크 시작 시간을 더함
+		for i := range subtitles {
+			subtitles[i].StartTime += timeOffset
+			subtitles[i].EndTime += timeOffset
+
+			// SentenceFrames의 타임스탬프도 보정
+			for j := range subtitles[i].SentenceFrames {
+				subtitles[i].SentenceFrames[j].WordStartTime += timeOffset
+				subtitles[i].SentenceFrames[j].WordEndTime += timeOffset
+			}
+		}
+
+		allSubtitles = append(allSubtitles, subtitles...)
+	}
+
+	// 시간순으로 정렬
+	SortSubtitleSegment(allSubtitles)
+
+	// 인덱스 재정렬
+	for i := range allSubtitles {
+		allSubtitles[i].Idx = i
+	}
+
+	log.Printf("Total merged subtitles: %d\n", len(allSubtitles))
+
+	return allSubtitles
+}
+
+// SaveTranscriptionJSON : 자막 데이터를 JSON 파일로 저장
+func SaveTranscriptionJSON(subtitles []SubtitleSegment, outputPath string) error {
+	data, err := json.MarshalIndent(subtitles, "", "  ")
+	if err != nil {
+		return fmt.Errorf("JSON marshal failed: %w", err)
+	}
+
+	err = os.WriteFile(outputPath, data, 0644)
+	if err != nil {
+		return fmt.Errorf("file write failed: %w", err)
+	}
+
 	return nil
 }

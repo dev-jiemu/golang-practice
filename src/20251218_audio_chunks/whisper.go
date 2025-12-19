@@ -27,13 +27,11 @@ type HallucinationSegment struct {
 
 type TranslatorWhisper struct {
 	speechSegments []speech.Segment
-	sidecar        *VADSidecar // 환각자막 & 과한 자막삭제 방지용 sidecar
 }
 
-func NewTranslatorWhisper(segments []speech.Segment, sidecar *VADSidecar) *TranslatorWhisper {
+func NewTranslatorWhisper(segments []speech.Segment) *TranslatorWhisper {
 	return &TranslatorWhisper{
 		speechSegments: segments,
-		sidecar:        sidecar,
 	}
 }
 
