@@ -9,21 +9,27 @@ import (
 )
 
 type Config struct {
-	TotalCount  int // 큐가 실제 수용 가능한 개수 (예: 8)
-	MaxSchedule int // 실제 스케줄할 개수 (예: 12)
+	ProcessingCount int // Processing 상태로 발행할 개수
+	PendingCount    int // Pending 상태로 발행할 개수
 
 	// 동적 할당 제한 조건
-	MaxDedicatedUsers int // 최대 몇 명까지 할당할지 (예: 3명)
-
-	StatRefreshInterval time.Duration // 통계 갱신 주기
+	MaxDedicatedUsers     int           // 최대 몇 명까지 할당할지 (예: 3명)
+	DedicatedQuotaPercent float64       // 선점 영역 비율 (예: 0.25 = 25%)
+	StatRefreshInterval   time.Duration // 통계 갱신 주기 (RDS)
 }
 
 func main() {
+	log.SetLevel(log.DebugLevel)
+	log.SetFormatter(&log.TextFormatter{
+		FullTimestamp: true,
+	})
+
 	config := &Config{
-		TotalCount:          8,
-		MaxSchedule:         12,
-		MaxDedicatedUsers:   3,
-		StatRefreshInterval: 5 * time.Second, // 실제 작업은 1~15분이므로 5초 주기면 충분
+		ProcessingCount:       20,
+		PendingCount:          4,
+		MaxDedicatedUsers:     3,
+		DedicatedQuotaPercent: 0.25, // 선점 영역 25%
+		StatRefreshInterval:   5 * time.Second,
 	}
 
 	scheduler := NewScheduler(config)
@@ -35,9 +41,9 @@ func main() {
 
 	go runDynamicScenarios(ctx, scheduler)
 
-	// 5분간 실행 (현실적인 시간)
+	// 10초간 실행 (테스트용)
 	go func() {
-		time.Sleep(5 * time.Minute)
+		time.Sleep(10 * time.Second)
 		log.Println("\n=== Test completed ===")
 		cancel()
 	}()
@@ -52,42 +58,35 @@ func main() {
 func setupTestData(s *Scheduler) {
 	log.Println("\n=== Setting up realistic test data ===")
 	log.Println("Simulating real-world scenario:")
-	log.Println("  - Task processing time: 1~15 minutes per task")
-	log.Println("  - API requests: continuous incoming")
-	log.Println("  - RDS: accumulates thousands of pending tasks")
-	log.Println("  - Queue: processes slowly (12 tasks per second)")
+	log.Println("  - ProcessingCount=20, PendingCount=4")
+	log.Println("  - MaxDedicatedUsers=3, DedicatedQuotaPercent=0.25")
+	log.Println("  - Distribution: ProcessingCount -> PendingCount order")
 	log.Println("")
 
-	now := time.Now()
-
-	// 시나리오: 현실적인 대량 데이터
 	log.Println("Creating user1 with 5000 pending tasks (heavy user)")
 	for i := 0; i < 5000; i++ {
 		s.AddTask(&Task{
-			ID:        fmt.Sprintf("user1-task-%d", i),
-			UserID:    "user1",
-			Status:    "pending",
-			CreatedAt: now.Add(-time.Duration(i) * time.Second),
+			ID:     fmt.Sprintf("user1-task-%d", i),
+			UserID: "user1",
+			Status: "pending",
 		})
 	}
 
 	log.Println("Creating user2 with 3000 pending tasks (heavy user)")
 	for i := 0; i < 3000; i++ {
 		s.AddTask(&Task{
-			ID:        fmt.Sprintf("user2-task-%d", i),
-			UserID:    "user2",
-			Status:    "pending",
-			CreatedAt: now.Add(-time.Duration(i) * time.Second),
+			ID:     fmt.Sprintf("user2-task-%d", i),
+			UserID: "user2",
+			Status: "pending",
 		})
 	}
 
 	log.Println("Creating user3 with 500 pending tasks")
 	for i := 0; i < 500; i++ {
 		s.AddTask(&Task{
-			ID:        fmt.Sprintf("user3-task-%d", i),
-			UserID:    "user3",
-			Status:    "pending",
-			CreatedAt: now.Add(-time.Duration(i) * time.Second),
+			ID:     fmt.Sprintf("user3-task-%d", i),
+			UserID: "user3",
+			Status: "pending",
 		})
 	}
 
@@ -97,77 +96,60 @@ func setupTestData(s *Scheduler) {
 
 	log.Println("\n=== Initial test data setup completed ===")
 	log.Println("Expected behavior:")
-	log.Println("  - 3 users exist → each gets 4 slots (12/3)")
-	log.Println("  - Tasks will be dispatched but NOT completed immediately")
-	log.Println("  - Pending count will decrease slowly (simulating real processing)")
+	log.Println("  - 3 users (≤ MaxDedicatedUsers) → equal distribution")
+	log.Println("  - ProcessingCount: 20/3 ≈ 6-7 each")
+	log.Println("  - PendingCount: 4/3 ≈ 1-2 each")
 	printCurrentStats(s)
 }
 
 func runDynamicScenarios(ctx context.Context, s *Scheduler) {
 
-	// 시나리오 1: 30초 후 네 번째 대량 유저 등장
-	time.Sleep(30 * time.Second)
+	// 시나리오 1: 3초 후 네 번째 대량 유저 등장
+	time.Sleep(3 * time.Second)
 	select {
 	case <-ctx.Done():
 		return
 	default:
-		log.Println("\n=== [30s] Scenario: 4th heavy user arrives ===")
-		now := time.Now()
+		log.Println("\n=== [3s] Scenario: 4th heavy user arrives ===")
 		for i := 0; i < 4000; i++ {
 			s.AddTask(&Task{
-				ID:        fmt.Sprintf("user4-task-%d", i),
-				UserID:    "user4",
-				Status:    "pending",
-				CreatedAt: now,
+				ID:     fmt.Sprintf("user4-task-%d", i),
+				UserID: "user4",
+				Status: "pending",
 			})
 		}
 		log.Println("Added user4 with 4000 pending tasks")
 		log.Println("Expected: 4 users, but MaxDedicatedUsers=3")
-		log.Println("  → Top 3 users by FIFO (user1, user2, user3) get 3 slots each")
-		log.Println("  → user4 (newest) goes to shared pool (3 slots)")
+		log.Println("  → Top 3 users by pending count get dedicated slots (25% each)")
+		log.Println("  → user4 competes in shared pool")
 
 		// 통계 즉시 갱신 (새 유저 반영)
 		s.refreshStats()
 		s.recalculateQuotas()
 	}
 
-	// 시나리오 2: 60초 후 다섯 번째 대량 유저 등장
-	time.Sleep(30 * time.Second)
+	// 시나리오 2: 6초 후 다섯 번째 대량 유저 등장
+	time.Sleep(3 * time.Second)
 	select {
 	case <-ctx.Done():
 		return
 	default:
-		log.Println("\n=== [60s] Scenario: 5th heavy user arrives ===")
-		now := time.Now()
+		log.Println("\n=== [6s] Scenario: 5th heavy user arrives ===")
 		for i := 0; i < 3500; i++ {
 			s.AddTask(&Task{
-				ID:        fmt.Sprintf("user5-task-%d", i),
-				UserID:    "user5",
-				Status:    "pending",
-				CreatedAt: now,
+				ID:     fmt.Sprintf("user5-task-%d", i),
+				UserID: "user5",
+				Status: "pending",
 			})
 		}
 		log.Println("Added user5 with 3500 pending tasks")
 		log.Println("Expected: 5 users, MaxDedicatedUsers=3")
-		log.Println("  → Top 3 by FIFO (user1, user2, user3) keep dedicated slots")
-		log.Println("  → user4, user5 share remaining slots (aging based)")
+		log.Println("  → Top 3 by pending count keep dedicated slots")
+		log.Println("  → user4, user5 share remaining slots (least requests first)")
 
 		// 통계 즉시 갱신
 		s.refreshStats()
 		s.recalculateQuotas()
-	}
-
-	// 시나리오 3: 2분 후 user1의 작업 대부분 완료 시뮬레이션
-	time.Sleep(60 * time.Second)
-	select {
-	case <-ctx.Done():
-		return
-	default:
-		log.Println("\n=== [2min] Scenario: user1 tasks mostly processed ===")
-		// 실제로는 worker가 처리하지만, 시뮬레이션을 위해 일부 완료 처리
-		completeUserTasks(s, "user1", 4000)
-		log.Println("Expected: user1's pending decreased significantly")
-		log.Println("  → Quota redistribution in next refresh cycle (max 5s delay)")
 	}
 }
 
@@ -178,7 +160,7 @@ func completeUserTasks(s *Scheduler, userID string, count int) {
 
 	completed := 0
 	for _, task := range s.tasks {
-		if task.UserID == userID && task.Status == "queued" && completed < count {
+		if task.UserID == userID && (task.Status == "Processing" || task.Status == "Pending") && completed < count {
 			task.Status = "completed"
 			completed++
 		}
