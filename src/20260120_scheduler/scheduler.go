@@ -68,9 +68,6 @@ func (v *Scheduler) Start(ctx context.Context) {
 	// 통계 갱신용 고루틴
 	go v.startStatRefresher(ctx)
 
-	// ★ Worker 시뮬레이션 고루틴 (task 완료 처리)
-	go v.startWorkerSimulation(ctx)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -101,14 +98,14 @@ func (v *Scheduler) processBatch() error {
 	processingAvailable := v.config.ProcessingCount - processingCount
 	if processingAvailable > 0 {
 		processingTasks := v.allocateTasks(processingAvailable, "Processing")
-		v.dispatchTasks(processingTasks, "Processing")
+		_ = v.dispatchTasks(processingTasks, "Processing")
 	}
 
 	// 2. PendingCount 분배
 	pendingAvailable := v.config.PendingCount - pendingCount
 	if pendingAvailable > 0 {
 		pendingTasks := v.allocateTasks(pendingAvailable, "Pending")
-		v.dispatchTasks(pendingTasks, "Pending")
+		_ = v.dispatchTasks(pendingTasks, "Pending")
 	}
 
 	return nil
@@ -301,37 +298,6 @@ func (v *Scheduler) refreshStats() {
 	v.statsMu.Unlock()
 }
 
-// ========================
-// TODO : replace RDS
-func (v *Scheduler) fetchUserPendingTasks(userID string, limit int) []*Task {
-	v.tasksMu.RLock()
-	defer v.tasksMu.RUnlock()
-
-	tasks := make([]*Task, 0, limit)
-	for _, task := range v.tasks {
-		if task.UserID == userID && task.Status == "pending" {
-			tasks = append(tasks, task)
-			if len(tasks) >= limit {
-				break
-			}
-		}
-	}
-	return tasks
-}
-
-func (v *Scheduler) fetchAllPendingTasks() []*Task {
-	v.tasksMu.RLock()
-	defer v.tasksMu.RUnlock()
-
-	tasks := make([]*Task, 0)
-	for _, task := range v.tasks {
-		if task.Status == "pending" {
-			tasks = append(tasks, task)
-		}
-	}
-	return tasks
-}
-
 func (v *Scheduler) dispatchTasks(tasks []*Task, status string) error {
 	if len(tasks) == 0 {
 		return nil
@@ -357,67 +323,80 @@ func (v *Scheduler) dispatchTasks(tasks []*Task, status string) error {
 	}
 	v.tasksMu.Unlock()
 
+	// 각 task마다 상태 모니터링 고루틴 시작
+	for _, task := range tasks {
+		go v.monitorTaskStatus(task)
+	}
+
 	return nil
 }
 
-// getExternalQueueCount : TODO : rabbitmq
-func (v *Scheduler) getExternalQueueCount() int {
-	// 실제로는 RabbitMQ message count 조회
-	// 분배 보고 싶으니까 0으로 해야징 :)
-	return 0
-}
+// monitorTaskStatus : 개별 task의 상태를 모니터링하고 완료 처리
+func (v *Scheduler) monitorTaskStatus(task *Task) {
+	if task.Status == "Pending" {
+		// 1. Pending → Processing: Queue 대기 시간
+		waitTime := time.Duration(1+time.Now().UnixNano()%3) * time.Second
+		time.Sleep(waitTime)
 
-// ★ startWorkerSimulation : Worker 완료 시뮬레이션 (POC용)
-func (v *Scheduler) startWorkerSimulation(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second) // 2초마다 일부 task 완료 처리
-	defer ticker.Stop()
+		// 2. Processing으로 상태 변경 (Consumer가 처리 시작)
+		v.updateTaskStatusOnly(task.ID, "Processing")
+		log.Debugf("→ Status changed: task=%s Pending → Processing (waited %v)",
+			task.ID, waitTime)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			v.simulateTaskCompletion()
-		}
+		// 3. Processing 처리 시간
+		processingTime := time.Duration(1+time.Now().UnixNano()%10) * time.Second
+		time.Sleep(processingTime)
+
+		// 4. Completed로 변경 및 Queue에서 제거
+		v.updateTaskStatus(task.ID, "completed")
+		log.Debugf("✓ Task completed: task=%s user=%s (wait=%v, process=%v)",
+			task.ID, task.UserID, waitTime, processingTime)
+	} else {
+		// Processing은 바로 처리 시작
+		processingTime := time.Duration(1+time.Now().UnixNano()%10) * time.Second
+		time.Sleep(processingTime)
+
+		// Completed로 변경 및 Queue에서 제거
+		v.updateTaskStatus(task.ID, "completed")
+		log.Debugf("✓ Task completed: task=%s user=%s (took %v)",
+			task.ID, task.UserID, processingTime)
 	}
 }
 
-// simulateTaskCompletion : 일부 task를 완료 처리하여 dispatchedTasks에서 제거
-func (v *Scheduler) simulateTaskCompletion() {
+// updateTaskStatusOnly : 상태만 업데이트 (dispatchedTasks에서 제거하지 않음)
+func (v *Scheduler) updateTaskStatusOnly(taskID string, newStatus string) {
+	// 원본 tasks 상태 업데이트 (DB 업데이트 시뮬레이션)
+	v.tasksMu.Lock()
+	if task, exists := v.tasks[taskID]; exists {
+		task.Status = newStatus
+	}
+	v.tasksMu.Unlock()
+
+	// dispatchedTasks도 상태 업데이트 (제거는 안 함)
 	v.dispatchedMu.Lock()
-	defer v.dispatchedMu.Unlock()
-
-	// ProcessingCount 개수만큼 동시 처리 가능하다고 가정
-	// 2초마다 일부(예: ProcessingCount의 1/4) 완료
-	completeCount := v.config.ProcessingCount / 4
-	if completeCount == 0 {
-		completeCount = 1
+	if task, exists := v.dispatchedTasks[taskID]; exists {
+		task.Status = newStatus
 	}
+	v.dispatchedMu.Unlock()
+}
 
-	completed := 0
-	for taskID, task := range v.dispatchedTasks {
-		if completed >= completeCount {
-			break
-		}
+// updateTaskStatus : task 상태 업데이트 및 dispatchedTasks에서 제거
+func (v *Scheduler) updateTaskStatus(taskID string, newStatus string) {
+	// 1. dispatchedTasks에서 제거 (Queue에서 완료됨)
+	v.dispatchedMu.Lock()
+	delete(v.dispatchedTasks, taskID)
+	remaining := len(v.dispatchedTasks)
+	v.dispatchedMu.Unlock()
 
-		// dispatchedTasks에서 제거
-		delete(v.dispatchedTasks, taskID)
-
-		// 원본 tasks에서도 완료 처리
-		v.tasksMu.Lock()
-		if originalTask, exists := v.tasks[taskID]; exists {
-			originalTask.Status = "completed"
-		}
-		v.tasksMu.Unlock()
-
-		log.Debugf("✓ Worker completed: task=%s user=%s", task.ID, task.UserID)
-		completed++
+	// 2. 원본 tasks 상태 업데이트 (DB 업데이트 시뮬레이션)
+	v.tasksMu.Lock()
+	if task, exists := v.tasks[taskID]; exists {
+		task.Status = newStatus
 	}
+	v.tasksMu.Unlock()
 
-	if completed > 0 {
-		log.Debugf("✓ Worker simulation: completed %d tasks, remaining in queue: %d",
-			completed, len(v.dispatchedTasks))
-	}
+	log.Debugf("✓ Status updated: task=%s → %s (queue remaining: %d)",
+		taskID, newStatus, remaining)
 }
 
 // ========== 테스트용 헬퍼 ==========
