@@ -41,6 +41,10 @@ type Scheduler struct {
 	dispatchedTasks map[string]*Task // taskID -> Task
 	dispatchedMu    sync.RWMutex
 
+	// Processing 상태 제어 (세마포어)
+	processingCount int
+	processingMu    sync.Mutex
+
 	// 통계 캐시
 	userStats map[string]*UserStat
 	statsMu   sync.RWMutex
@@ -82,30 +86,31 @@ func (v *Scheduler) Start(ctx context.Context) {
 
 func (v *Scheduler) processBatch() error {
 	// ProcessingCount -> PendingCount 순서로 분배
+	// 하지만 모든 task는 "pending" 상태로 dispatch
 	v.dispatchedMu.RLock()
 	processingCount := 0
 	pendingCount := 0
 	for _, task := range v.dispatchedTasks {
 		if task.Status == "Processing" {
 			processingCount++
-		} else if task.Status == "Pending" {
+		} else if task.Status == "pending" {
 			pendingCount++
 		}
 	}
 	v.dispatchedMu.RUnlock()
 
-	// 1. ProcessingCount 먼저 분배
+	// 1. ProcessingCount만큼 먼저 배분 (공평하게)
 	processingAvailable := v.config.ProcessingCount - processingCount
 	if processingAvailable > 0 {
-		processingTasks := v.allocateTasks(processingAvailable, "Processing")
-		_ = v.dispatchTasks(processingTasks, "Processing")
+		tasks := v.allocateTasks(processingAvailable, "pending")
+		_ = v.dispatchTasks(tasks, "pending")
 	}
 
-	// 2. PendingCount 분배
+	// 2. PendingCount만큼 추가 배분 (공평하게)
 	pendingAvailable := v.config.PendingCount - pendingCount
 	if pendingAvailable > 0 {
-		pendingTasks := v.allocateTasks(pendingAvailable, "Pending")
-		_ = v.dispatchTasks(pendingTasks, "Pending")
+		tasks := v.allocateTasks(pendingAvailable, "pending")
+		_ = v.dispatchTasks(tasks, "pending")
 	}
 
 	return nil
@@ -303,14 +308,14 @@ func (v *Scheduler) dispatchTasks(tasks []*Task, status string) error {
 		return nil
 	}
 
-	log.Printf("[%s] dispatching %d tasks", status, len(tasks))
+	log.Printf("[dispatch] dispatching %d tasks as '%s'", len(tasks), status)
 
 	// dispatchedTasks에 추가
 	v.dispatchedMu.Lock()
 	for _, task := range tasks {
 		task.Status = status
 		v.dispatchedTasks[task.ID] = task
-		log.Printf("  - task=%s user=%s status=%s", task.ID, task.UserID, status)
+		log.Debugf("  - task=%s user=%s status=%s", task.ID, task.UserID, status)
 	}
 	v.dispatchedMu.Unlock()
 
@@ -333,34 +338,39 @@ func (v *Scheduler) dispatchTasks(tasks []*Task, status string) error {
 
 // monitorTaskStatus : 개별 task의 상태를 모니터링하고 완료 처리
 func (v *Scheduler) monitorTaskStatus(task *Task) {
-	if task.Status == "Pending" {
-		// 1. Pending → Processing: Queue 대기 시간
-		waitTime := time.Duration(1+time.Now().UnixNano()%3) * time.Second
-		time.Sleep(waitTime)
+	// 모든 task는 pending 상태로 시작
 
-		// 2. Processing으로 상태 변경 (Consumer가 처리 시작)
-		v.updateTaskStatusOnly(task.ID, "Processing")
-		log.Debugf("→ Status changed: task=%s Pending → Processing (waited %v)",
-			task.ID, waitTime)
+	// 1. 랜덤 대기 시간 (1~3초)
+	waitTime := time.Duration(1+time.Now().UnixNano()%3) * time.Second
+	time.Sleep(waitTime)
 
-		// 3. Processing 처리 시간
-		processingTime := time.Duration(1+time.Now().UnixNano()%10) * time.Second
-		time.Sleep(processingTime)
-
-		// 4. Completed로 변경 및 Queue에서 제거
-		v.updateTaskStatus(task.ID, "completed")
-		log.Debugf("✓ Task completed: task=%s user=%s (wait=%v, process=%v)",
-			task.ID, task.UserID, waitTime, processingTime)
-	} else {
-		// Processing은 바로 처리 시작
-		processingTime := time.Duration(1+time.Now().UnixNano()%10) * time.Second
-		time.Sleep(processingTime)
-
-		// Completed로 변경 및 Queue에서 제거
-		v.updateTaskStatus(task.ID, "completed")
-		log.Debugf("✓ Task completed: task=%s user=%s (took %v)",
-			task.ID, task.UserID, processingTime)
+	// 2. Processing으로 전환 시도 (ProcessingCount 제한)
+	v.processingMu.Lock()
+	for v.processingCount >= v.config.ProcessingCount {
+		v.processingMu.Unlock()
+		time.Sleep(100 * time.Millisecond) // 대기 후 재시도
+		v.processingMu.Lock()
 	}
+	v.processingCount++
+	v.processingMu.Unlock()
+
+	// 3. Processing으로 상태 변경
+	v.updateTaskStatusOnly(task.ID, "Processing")
+	log.Debugf("→ Status changed: task=%s pending → Processing (waited %v)",
+		task.ID, waitTime)
+
+	// 4. Processing 처리 시간 (1~10초)
+	processingTime := time.Duration(1+time.Now().UnixNano()%10) * time.Second
+	time.Sleep(processingTime)
+
+	// 5. Completed로 변경 및 Processing 세마포어 해제
+	v.processingMu.Lock()
+	v.processingCount--
+	v.processingMu.Unlock()
+
+	v.updateTaskStatus(task.ID, "completed")
+	log.Debugf("✓ Task completed: task=%s user=%s (wait=%v, process=%v)",
+		task.ID, task.UserID, waitTime, processingTime)
 }
 
 // updateTaskStatusOnly : 상태만 업데이트 (dispatchedTasks에서 제거하지 않음)

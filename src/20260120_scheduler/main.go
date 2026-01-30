@@ -12,7 +12,6 @@ type Config struct {
 	ProcessingCount int // Processing 상태로 발행할 개수
 	PendingCount    int // Pending 상태로 발행할 개수
 
-	// 동적 할당 제한 조건
 	MaxDedicatedUsers     int           // 최대 몇 명까지 할당할지 (예: 3명)
 	DedicatedQuotaPercent float64       // 선점 영역 비율 (예: 0.25 = 25%)
 	StatRefreshInterval   time.Duration // 통계 갱신 주기 (RDS)
